@@ -4,18 +4,18 @@ package main
 import (
 	_ "github.com/lib/pq"
 	"archive/zip"
-	"bufio"
 	"database/sql"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"log"
 	"github.com/gorilla/mux"
+	"bufio"
+	"encoding/json"
+	"strings"
 )
 
 
@@ -50,39 +50,51 @@ func main() {
 }
 
 func handlePostPrices(w http.ResponseWriter, r *http.Request) {
-	// Проверяем, что запрос содержит файл
-	err := r.ParseMultipartForm(10 << 20) // Максимальный размер: 10 MB
-	if err != nil {
-		http.Error(w, "Ошибка обработки формы", http.StatusBadRequest)
-		return
-	}
+    // Проверяем, что запрос содержит файл
+    err := r.ParseMultipartForm(10 << 20) // Максимальный размер: 10 MB
+    if err != nil {
+        http.Error(w, "Ошибка обработки формы", http.StatusBadRequest)
+        return
+    }
 
-	// Получаем файл из формы
-	file, handler, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+    // Получаем файл из формы
+    file, handler, err := r.FormFile("file")
+    if err != nil {
+        http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
+        return
+    }
+    defer file.Close()
 
-	fmt.Printf("Загружен файл: %s\n", handler.Filename)
+    fmt.Printf("Загружен файл: %s\n", handler.Filename)
 
-	// Сохраняем файл временно на диск
-	tempFile, err := os.CreateTemp("", "upload-*.zip")
-	if err != nil {
-		http.Error(w, "Не удалось сохранить файл", http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(tempFile.Name()) // Удаляем временный файл после обработки
+    // Сохраняем файл временно на диск
+    tempFile, err := os.CreateTemp("", "upload-*.zip")
+    if err != nil {
+        http.Error(w, "Не удалось сохранить файл", http.StatusInternalServerError)
+        return
+    }
+    defer os.Remove(tempFile.Name()) // Удаляем временный файл после обработки
 
-	
-	// Разархивируем файл
-	zipReader, err := zip.OpenReader(tempFile.Name())
-	if err != nil {
-		http.Error(w, "Ошибка разархивации файла", http.StatusBadRequest)
-		return
-	}
-	defer zipReader.Close()
+	log.Printf("Создан временный файл: %s", tempFile.Name())
+
+    // Копируем содержимое загруженного файла во временный файл
+    _, err = io.Copy(tempFile, file)
+    if err != nil {
+        http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+        log.Printf("Ошибка сохранения файла: %v", err)
+        return
+    }
+
+    fmt.Printf("Временный файл: %s\n", tempFile.Name())
+
+    // Разархивируем файл
+    zipReader, err := zip.OpenReader(tempFile.Name())
+    if err != nil {
+        http.Error(w, "Ошибка разархивации файла", http.StatusBadRequest)
+        log.Printf("Ошибка разархивации файла: %v", err)
+        return
+    }
+    defer zipReader.Close()
 
 	var csvFile string
 	for _, f := range zipReader.File {
@@ -155,6 +167,9 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
+
+
+
 
 
 func handleGetPrices(w http.ResponseWriter, r *http.Request) {
