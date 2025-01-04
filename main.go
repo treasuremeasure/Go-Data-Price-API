@@ -23,7 +23,18 @@ var db *sql.DB
 
 func main() {
 	// Подключение к PostgreSQL
-	connStr := "host=localhost port=5432 user=validator password=val1dat0r dbname=project-sem-1 sslmode=disable"
+
+	dbHost := getEnv("POSTGRES_HOST", "localhost")
+	dbPort := getEnv("POSTGRES_PORT", "5432")
+	dbUser := getEnv("POSTGRES_USER", "validator")
+	dbPassword := getEnv("POSTGRES_PASSWORD", "val1dat0r")
+	dbName := getEnv("POSTGRES_DB", "project-sem-1")
+
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		dbHost, dbPort, dbUser, dbPassword, dbName)
+
+	log.Printf("Подключаемся к базе данных: %s", connStr)
+
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
@@ -47,6 +58,14 @@ func main() {
 	// Запуск сервера
 	fmt.Println("Сервер запущен на порту 8080...")
 	log.Fatal(http.ListenAndServe(":8080", router))
+}
+
+// Функция для получения значения переменной окружения с возможностью задания значения по умолчанию
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
 }
 
 func handlePostPrices(w http.ResponseWriter, r *http.Request) {
