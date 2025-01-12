@@ -1,23 +1,22 @@
 package main
 
-
 import (
-	_ "github.com/lib/pq"
 	"archive/zip"
+	"bufio"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"log"
-	"github.com/gorilla/mux"
-	"bufio"
-	"encoding/json"
 	"strings"
-)
 
+	"github.com/gorilla/mux"
+	_ "github.com/lib/pq"
+)
 
 var db *sql.DB
 
@@ -48,7 +47,7 @@ func main() {
 		log.Fatalf("База данных недоступна: %v", err)
 	}
 
-	fmt.Println("Соединение с базой данных успешно установлено!")
+	log.Println("Соединение с базой данных успешно установлено!")
 
 	// Настройка маршрутов
 	router := mux.NewRouter()
@@ -56,7 +55,7 @@ func main() {
 	router.HandleFunc("/api/v0/prices", handleGetPrices).Methods("GET")
 
 	// Запуск сервера
-	fmt.Println("Сервер запущен на порту 8080...")
+	log.Println("Сервер запущен на порту 8080...")
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
 
@@ -69,51 +68,51 @@ func getEnv(key, defaultValue string) string {
 }
 
 func handlePostPrices(w http.ResponseWriter, r *http.Request) {
-    // Проверяем, что запрос содержит файл
-    err := r.ParseMultipartForm(10 << 20) // Максимальный размер: 10 MB
-    if err != nil {
-        http.Error(w, "Ошибка обработки формы", http.StatusBadRequest)
-        return
-    }
+	// Проверяем, что запрос содержит файл
+	err := r.ParseMultipartForm(10 << 20) // Максимальный размер: 10 MB
+	if err != nil {
+		http.Error(w, "Ошибка обработки формы", http.StatusBadRequest)
+		return
+	}
 
-    // Получаем файл из формы
-    file, handler, err := r.FormFile("file")
-    if err != nil {
-        http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
-        return
-    }
-    defer file.Close()
+	// Получаем файл из формы
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
 
-    fmt.Printf("Загружен файл: %s\n", handler.Filename)
+	log.Printf("Загружен файл: %s\n", handler.Filename)
 
-    // Сохраняем файл временно на диск
-    tempFile, err := os.CreateTemp("", "upload-*.zip")
-    if err != nil {
-        http.Error(w, "Не удалось сохранить файл", http.StatusInternalServerError)
-        return
-    }
-    defer os.Remove(tempFile.Name()) // Удаляем временный файл после обработки
+	// Сохраняем файл временно на диск
+	tempFile, err := os.CreateTemp("", "upload-*.zip")
+	if err != nil {
+		http.Error(w, "Не удалось сохранить файл", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(tempFile.Name()) // Удаляем временный файл после обработки
 
 	log.Printf("Создан временный файл: %s", tempFile.Name())
 
-    // Копируем содержимое загруженного файла во временный файл
-    _, err = io.Copy(tempFile, file)
-    if err != nil {
-        http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
-        log.Printf("Ошибка сохранения файла: %v", err)
-        return
-    }
+	// Копируем содержимое загруженного файла во временный файл
+	_, err = io.Copy(tempFile, file)
+	if err != nil {
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		log.Printf("Ошибка сохранения файла: %v", err)
+		return
+	}
 
-    fmt.Printf("Временный файл: %s\n", tempFile.Name())
+	log.Printf("Временный файл: %s\n", tempFile.Name())
 
-    // Разархивируем файл
-    zipReader, err := zip.OpenReader(tempFile.Name())
-    if err != nil {
-        http.Error(w, "Ошибка разархивации файла", http.StatusBadRequest)
-        log.Printf("Ошибка разархивации файла: %v", err)
-        return
-    }
-    defer zipReader.Close()
+	// Разархивируем файл
+	zipReader, err := zip.OpenReader(tempFile.Name())
+	if err != nil {
+		http.Error(w, "Ошибка разархивации файла", http.StatusBadRequest)
+		log.Printf("Ошибка разархивации файла: %v", err)
+		return
+	}
+	defer zipReader.Close()
 
 	var csvFile string
 	for _, f := range zipReader.File {
@@ -128,9 +127,15 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Начинаем транзакцию
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Ошибка начала транзакции", http.StatusInternalServerError)
+		return
+	}
+
 	// Читаем содержимое CSV-файла
 	var totalItems int
-	var totalPrice float64
 	categories := make(map[string]struct{})
 
 	for _, f := range zipReader.File {
@@ -154,9 +159,19 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
+				// Проверка на корректность данных
+				if len(record) < 5 {
+					http.Error(w, "Некорректный формат записи в CSV-файле", http.StatusBadRequest)
+					return
+				}
+
 				name := record[1]
 				category := record[2]
-				price, _ := strconv.ParseFloat(record[3], 64)
+				price, err := strconv.ParseFloat(record[3], 64)
+				if err != nil {
+					http.Error(w, "Некорректное значение цены", http.StatusBadRequest)
+					return
+				}
 				createDate := record[4]
 
 				// Сохраняем в базу данных
@@ -170,15 +185,38 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 				}
 
 				totalItems++
-				totalPrice += price
 				categories[category] = struct{}{}
 			}
 		}
 	}
 
+	// Завершаем транзакцию
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Ошибка завершения транзакции", http.StatusInternalServerError)
+		return
+	}
+
+	// Подсчет total_price и total_categories по всем объектам в таблице
+	var totalPrice float64
+	var totalCategories int
+
+	// Запрос для подсчета суммарной стоимости
+	err = db.QueryRow("SELECT SUM(price) FROM prices").Scan(&totalPrice)
+	if err != nil {
+		http.Error(w, "Ошибка получения суммарной стоимости", http.StatusInternalServerError)
+		return
+	}
+
+	// Запрос для подсчета уникальных категорий
+	err = db.QueryRow("SELECT COUNT(DISTINCT category) FROM prices").Scan(&totalCategories)
+	if err != nil {
+		http.Error(w, "Ошибка получения количества категорий", http.StatusInternalServerError)
+		return
+	}
+
 	// Формируем JSON-ответ
 	response := map[string]interface{}{
-		"total_items":     totalItems,
+		"total_items":      totalItems,
 		"total_categories": len(categories),
 		"total_price":      totalPrice,
 	}
@@ -186,10 +224,6 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-
-
-
-
 
 func handleGetPrices(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query("SELECT id, name, category, price, create_date FROM prices")
@@ -226,6 +260,12 @@ func handleGetPrices(w http.ResponseWriter, r *http.Request) {
 		writer.Write([]string{
 			strconv.Itoa(id), name, category, fmt.Sprintf("%.2f", price), createDate,
 		})
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Ошибка при обработке строк", http.StatusInternalServerError)
+		log.Printf("Ошибка при обработке строк: %v", err)
+		return
 	}
 
 	writer.Flush()
@@ -275,6 +315,3 @@ func handleGetPrices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\"data.zip\"")
 	http.ServeFile(w, r, zipFile.Name())
 }
-
-
-
